@@ -179,6 +179,19 @@ public final class LicenseManager {
         return prefs(c).getString("code", "");
     }
 
+    public static long expiresAt(Context c) {
+        return prefs(c).getLong("expires", 0L);
+    }
+
+    /** Date de fin lisible "JJ/MM/AAAA", vide si inconnue. */
+    public static String expiresText(Context c) {
+        long e = expiresAt(c);
+        if (e <= 0L) return "";
+        java.text.SimpleDateFormat f =
+            new java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.FRANCE);
+        return f.format(new java.util.Date(e));
+    }
+
     /** Accès autorisé hors-ligne : code non expiré et vérifié il y a moins de GRACE jours. */
     public static boolean isActivatedLocally(Context c) {
         SharedPreferences p = prefs(c);
@@ -335,6 +348,11 @@ public class LicenseActivity extends Activity {
     }
 
     private void launchApp() {
+        String exp = LicenseManager.expiresText(this);
+        if (exp != null && !exp.isEmpty()) {
+            android.widget.Toast.makeText(this,
+                "Abonnement actif jusqu'au " + exp, android.widget.Toast.LENGTH_LONG).show();
+        }
         try {
             Intent i = new Intent();
             i.setClassName(getPackageName(), "%(splash)s");
