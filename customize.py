@@ -94,24 +94,21 @@ def apply_logo():
         log("!! Pillow absent — logo non appliqué")
         return
 
-    logo = Image.open(src).convert("RGBA")
+    logo = Image.open(src).convert("RGBA")  # image paysage -> bannière
+    icon_src = os.path.join(ROOT, "assets", "icon.png")
+    icon_img = Image.open(icon_src).convert("RGBA") if os.path.exists(icon_src) else logo
 
     def square_icon(size):
-        # fond sombre + logo centré (on garde le logo entier, letterbox)
-        canvas = Image.new("RGBA", (size, size), (14, 18, 28, 255))
-        w, h = logo.size
-        scale = min(size / w, size / h) * 0.92
-        nw, nh = int(w * scale), int(h * scale)
-        small = logo.resize((nw, nh), Image.LANCZOS)
-        canvas.alpha_composite(small, ((size - nw) // 2, (size - nh) // 2))
-        return canvas
+        # icône carrée fournie telle quelle (remplit tout le carré)
+        return icon_img.resize((size, size), Image.LANCZOS)
 
     def banner(w, h):
-        canvas = Image.new("RGBA", (w, h), (14, 18, 28, 255))
+        # remplir la bannière (cover) à partir de l'image paysage
         lw, lh = logo.size
-        scale = min(w / lw, h / lh) * 0.96
+        scale = max(w / lw, h / lh)
         nw, nh = int(lw * scale), int(lh * scale)
         small = logo.resize((nw, nh), Image.LANCZOS)
+        canvas = Image.new("RGBA", (w, h), (0, 0, 0, 255))
         canvas.alpha_composite(small, ((w - nw) // 2, (h - nh) // 2))
         return canvas
 
