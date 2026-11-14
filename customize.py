@@ -504,9 +504,17 @@ public class LicenseActivity extends Activity {
 }
 ''' % {"pkg": JC_PACKAGE, "splash": SPLASH_CLASS, "fileauth": FILE_AUTH}
 
+    # FileProvider dédié (sous-classe) pour éviter tout conflit avec celui de SmartTube
+    provider_src = (
+        'package %s;\n\n'
+        'import androidx.core.content.FileProvider;\n\n'
+        'public class JcFileProvider extends FileProvider {}\n'
+    ) % JC_PACKAGE
+
     write(os.path.join(pkg_path, "LicenseManager.java"), manager)
     write(os.path.join(pkg_path, "LicenseActivity.java"), activity)
-    log("sources LicenseManager + LicenseActivity écrites (%s)" % JC_PACKAGE)
+    write(os.path.join(pkg_path, "JcFileProvider.java"), provider_src)
+    log("sources LicenseManager + LicenseActivity + JcFileProvider écrites (%s)" % JC_PACKAGE)
 
     # Layout de l'écran d'activation
     layout = r'''<?xml version="1.0" encoding="utf-8"?>
@@ -630,7 +638,7 @@ def patch_manifest():
         '            </intent-filter>\n'
         '        </activity>\n'
         '        <provider\n'
-        '            android:name="androidx.core.content.FileProvider"\n'
+        '            android:name="%(pkg)s.JcFileProvider"\n'
         '            android:authorities="%(fileauth)s"\n'
         '            android:exported="false"\n'
         '            android:grantUriPermissions="true">\n'
