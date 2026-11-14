@@ -239,6 +239,17 @@ public final class LicenseManager {
             .apply();
     }
 
+    /** Efface l'activation (re-verrouille l'appli). */
+    public static void clearActivation(Context c) {
+        prefs(c).edit().clear().apply();
+    }
+
+    /** Raison définitive (hors coupure réseau) qui doit re-verrouiller. */
+    public static boolean isHardFail(String reason) {
+        return "code_expire".equals(reason) || "code_bloque".equals(reason)
+            || "code_inconnu".equals(reason) || "autre_appareil".equals(reason);
+    }
+
     /** Appel réseau bloquant — à lancer dans un thread. */
     public static Result check(Context c, String code) {
         Result r = new Result();
@@ -343,12 +354,11 @@ public class LicenseActivity extends Activity {
         mValidate = (Button) findViewById(getResources().getIdentifier("jc_validate", "id", getPackageName()));
 
         if (LicenseManager.isActivatedLocally(this)) {
-            // Déjà activé : on masque la saisie et on regarde les mises à jour
+            // Déjà activé : on masque la saisie, on revérifie, on affiche l'échéance
             mCode.setVisibility(View.GONE);
             mValidate.setVisibility(View.GONE);
             mStatus.setText("Chargement…");
-            revalidateInBackground();
-            checkUpdateThenLaunch();
+            resumeFlow();
             return;
         }
 
@@ -383,30 +393,48 @@ public class LicenseActivity extends Activity {
         }).start();
     }
 
-    private void revalidateInBackground() {
+    /** Revérifie en ligne, puis : re-verrouille si besoin, propose la MAJ, ou affiche l'échéance. */
+    private void resumeFlow() {
         final String code = LicenseManager.savedCode(this);
-        if (code == null || code.isEmpty()) return;
-        new Thread(new Runnable() {
-            @Override public void run() { LicenseManager.check(LicenseActivity.this, code); }
-        }).start();
-    }
-
-    // ---- Mise à jour intégrée ----
-    private void checkUpdateThenLaunch() {
         new Thread(new Runnable() {
             @Override public void run() {
+                final LicenseManager.Result r =
+                    (code == null || code.isEmpty()) ? null : LicenseManager.check(LicenseActivity.this, code);
                 final int latest = LicenseManager.latestBuild();
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
-                        if (latest > LicenseManager.BUILD) {
+                        if (r != null && !r.valid && LicenseManager.isHardFail(r.reason)) {
+                            relock(r.reason);
+                        } else if (latest > LicenseManager.BUILD) {
                             showUpdateDialog();
                         } else {
-                            launchApp();
+                            showWelcomeThenLaunch();
                         }
                     }
                 });
             }
         }).start();
+    }
+
+    private void relock(String reason) {
+        LicenseManager.clearActivation(this);
+        mCode.setVisibility(View.VISIBLE);
+        mValidate.setVisibility(View.VISIBLE);
+        mValidate.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { submit(); }
+        });
+        mStatus.setText(LicenseManager.message(reason));
+        mCode.requestFocus();
+    }
+
+    private void showWelcomeThenLaunch() {
+        String exp = LicenseManager.expiresText(this);
+        mStatus.setTextColor(0xFFFFFFFF);
+        mStatus.setTextSize(20);
+        mStatus.setText(exp.isEmpty() ? "Abonnement actif" : "Abonnement actif jusqu'au " + exp);
+        mStatus.postDelayed(new Runnable() {
+            @Override public void run() { launchApp(); }
+        }, 3000);
     }
 
     private void showUpdateDialog() {
@@ -489,10 +517,6 @@ public class LicenseActivity extends Activity {
     }
 
     private void launchApp() {
-        String exp = LicenseManager.expiresText(this);
-        if (exp != null && !exp.isEmpty()) {
-            Toast.makeText(this, "Abonnement actif jusqu'au " + exp, Toast.LENGTH_LONG).show();
-        }
         try {
             Intent i = new Intent();
             i.setClassName(getPackageName(), "%(splash)s");
