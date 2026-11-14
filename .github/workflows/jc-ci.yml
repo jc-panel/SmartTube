@@ -52,6 +52,7 @@ jobs:
           SRC=$(find smarttubetv/build/outputs/apk/stfdroid/release -name "*universal*.apk" | head -n1)
           if [ -z "$SRC" ]; then SRC=$(find smarttubetv/build/outputs/apk/stfdroid/release -name "*.apk" | head -n1); fi
           cp "$SRC" tubeplus-tv.apk
+          echo "${GITHUB_RUN_NUMBER}" > version.txt
           echo "path=tubeplus-tv.apk" >> $GITHUB_OUTPUT
 
       - name: Publier la release « latest »
@@ -59,7 +60,9 @@ jobs:
         with:
           tag_name: latest
           name: TubePlus TV (dernière version)
-          files: tubeplus-tv.apk
+          files: |
+            tubeplus-tv.apk
+            version.txt
           fail_on_unmatched_files: true
 
       - name: Sauvegarde artifact

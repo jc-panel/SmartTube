@@ -25,6 +25,12 @@ JC_PACKAGE      = "com.jcpanel.tubeplus"
 API_URL         = "https://jc-panel.com/wp-json/jclic/v1/check"
 OFFLINE_GRACE_DAYS = 7
 
+# Mise à jour intégrée
+JC_BUILD    = os.environ.get("GITHUB_RUN_NUMBER", "0")
+VERSION_URL = "https://github.com/jc-panel/SmartTube/releases/latest/download/version.txt"
+APK_DL_URL  = "https://github.com/jc-panel/SmartTube/releases/latest/download/tubeplus-tv.apk"
+FILE_AUTH   = APPLICATION_ID + ".jcfileprovider"
+
 APP_MODULE   = os.path.join(ROOT, "smarttubetv")
 MAIN_SRC     = os.path.join(APP_MODULE, "src", "main")
 MANIFEST     = os.path.join(MAIN_SRC, "AndroidManifest.xml")
@@ -157,6 +163,29 @@ public final class LicenseManager {
     private static final long GRACE_MS = %(grace)dL * 24L * 60L * 60L * 1000L;
     private static final String PREF = "jc_license";
 
+    public static final int BUILD = %(build)s;
+    public static final String VERSION_URL = "%(verurl)s";
+    public static final String APK_URL = "%(apkurl)s";
+
+    /** Numéro de la dernière version publiée, ou -1 si indisponible. */
+    public static int latestBuild() {
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL(VERSION_URL).openConnection();
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(6000);
+            conn.setInstanceFollowRedirects(true);
+            BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
+            String line = br.readLine();
+            br.close();
+            return line == null ? -1 : Integer.parseInt(line.trim());
+        } catch (Exception e) {
+            return -1;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
     public static final class Result {
         public boolean valid;
         public String reason = "";
@@ -271,19 +300,32 @@ public final class LicenseManager {
         return "Code invalide.";
     }
 }
-''' % {"pkg": JC_PACKAGE, "api": API_URL, "grace": OFFLINE_GRACE_DAYS}
+''' % {"pkg": JC_PACKAGE, "api": API_URL, "grace": OFFLINE_GRACE_DAYS,
+       "build": JC_BUILD, "verurl": VERSION_URL, "apkurl": APK_DL_URL}
 
     activity = r'''package %(pkg)s;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
+import android.widget.Toast;
 
-/** Écran d'activation TubePlus (point d'entrée). */
+import androidx.core.content.FileProvider;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+
+/** Écran d'activation + mise à jour TubePlus (point d'entrée). */
 public class LicenseActivity extends Activity {
 
     private EditText mCode;
@@ -294,19 +336,21 @@ public class LicenseActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Déjà activé (avec tolérance hors-ligne) -> on lance l'app directement
-        if (LicenseManager.isActivatedLocally(this)) {
-            revalidateInBackground();
-            launchApp();
-            return;
-        }
-
         int id_root = getResources().getIdentifier("jc_license", "layout", getPackageName());
         setContentView(id_root);
-
         mCode = (EditText) findViewById(getResources().getIdentifier("jc_code", "id", getPackageName()));
         mStatus = (TextView) findViewById(getResources().getIdentifier("jc_status", "id", getPackageName()));
         mValidate = (Button) findViewById(getResources().getIdentifier("jc_validate", "id", getPackageName()));
+
+        if (LicenseManager.isActivatedLocally(this)) {
+            // Déjà activé : on masque la saisie et on regarde les mises à jour
+            mCode.setVisibility(View.GONE);
+            mValidate.setVisibility(View.GONE);
+            mStatus.setText("Chargement…");
+            revalidateInBackground();
+            checkUpdateThenLaunch();
+            return;
+        }
 
         mValidate.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { submit(); }
@@ -347,11 +391,107 @@ public class LicenseActivity extends Activity {
         }).start();
     }
 
+    // ---- Mise à jour intégrée ----
+    private void checkUpdateThenLaunch() {
+        new Thread(new Runnable() {
+            @Override public void run() {
+                final int latest = LicenseManager.latestBuild();
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (latest > LicenseManager.BUILD) {
+                            showUpdateDialog();
+                        } else {
+                            launchApp();
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void showUpdateDialog() {
+        new AlertDialog.Builder(this)
+            .setTitle("Nouvelle version disponible")
+            .setMessage("Une mise à jour de TubePlus est prête. L'installer maintenant ?")
+            .setCancelable(false)
+            .setPositiveButton("Installer", new DialogInterface.OnClickListener() {
+                @Override public void onClick(DialogInterface d, int w) { downloadAndInstall(); }
+            })
+            .setNegativeButton("Plus tard", new DialogInterface.OnClickListener() {
+                @Override public void onClick(DialogInterface d, int w) { launchApp(); }
+            })
+            .show();
+    }
+
+    private File cacheDir() {
+        File d = getExternalCacheDir();
+        return d != null ? d : getCacheDir();
+    }
+
+    private void downloadAndInstall() {
+        mStatus.setText("Téléchargement…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                HttpURLConnection c = null;
+                try {
+                    final File out = new File(cacheDir(), "update.apk");
+                    c = (HttpURLConnection) new URL(LicenseManager.APK_URL).openConnection();
+                    c.setInstanceFollowRedirects(true);
+                    c.setConnectTimeout(15000);
+                    c.setReadTimeout(30000);
+                    final long len = c.getContentLength();
+                    InputStream in = c.getInputStream();
+                    FileOutputStream fo = new FileOutputStream(out);
+                    byte[] buf = new byte[8192];
+                    int n;
+                    long total = 0;
+                    while ((n = in.read(buf)) > 0) {
+                        fo.write(buf, 0, n);
+                        total += n;
+                        if (len > 0) {
+                            final int pct = (int) (total * 100 / len);
+                            runOnUiThread(new Runnable() {
+                                @Override public void run() { mStatus.setText("Téléchargement… " + pct + "%%"); }
+                            });
+                        }
+                    }
+                    fo.flush();
+                    fo.close();
+                    in.close();
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() { install(out); }
+                    });
+                } catch (Exception e) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            Toast.makeText(LicenseActivity.this, "Mise à jour impossible, on continue.", Toast.LENGTH_SHORT).show();
+                            launchApp();
+                        }
+                    });
+                } finally {
+                    if (c != null) c.disconnect();
+                }
+            }
+        }).start();
+    }
+
+    private void install(File apk) {
+        try {
+            Uri uri = FileProvider.getUriForFile(this, "%(fileauth)s", apk);
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(uri, "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            finish();
+        } catch (Exception e) {
+            launchApp();
+        }
+    }
+
     private void launchApp() {
         String exp = LicenseManager.expiresText(this);
         if (exp != null && !exp.isEmpty()) {
-            android.widget.Toast.makeText(this,
-                "Abonnement actif jusqu'au " + exp, android.widget.Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Abonnement actif jusqu'au " + exp, Toast.LENGTH_LONG).show();
         }
         try {
             Intent i = new Intent();
@@ -362,7 +502,7 @@ public class LicenseActivity extends Activity {
         finish();
     }
 }
-''' % {"pkg": JC_PACKAGE, "splash": SPLASH_CLASS}
+''' % {"pkg": JC_PACKAGE, "splash": SPLASH_CLASS, "fileauth": FILE_AUTH}
 
     write(os.path.join(pkg_path, "LicenseManager.java"), manager)
     write(os.path.join(pkg_path, "LicenseActivity.java"), activity)
@@ -441,6 +581,16 @@ public class LicenseActivity extends Activity {
     write(os.path.join(MAIN_SRC, "res", "layout", "jc_license.xml"), layout)
     log("layout jc_license.xml écrit")
 
+    # FileProvider : chemins autorisés pour installer la mise à jour
+    file_paths = '''<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <external-cache-path name="jc_cache" path="." />
+    <cache-path name="jc_cache_int" path="." />
+</paths>
+'''
+    write(os.path.join(MAIN_SRC, "res", "xml", "jc_file_paths.xml"), file_paths)
+    log("jc_file_paths.xml écrit")
+
 
 # ============================================================================
 # 4. Manifest : LicenseActivity devient le launcher à la place du Splash
@@ -479,7 +629,16 @@ def patch_manifest():
         '                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />\n'
         '            </intent-filter>\n'
         '        </activity>\n'
-    ) % {"pkg": JC_PACKAGE}
+        '        <provider\n'
+        '            android:name="androidx.core.content.FileProvider"\n'
+        '            android:authorities="%(fileauth)s"\n'
+        '            android:exported="false"\n'
+        '            android:grantUriPermissions="true">\n'
+        '            <meta-data\n'
+        '                android:name="android.support.FILE_PROVIDER_PATHS"\n'
+        '                android:resource="@xml/jc_file_paths" />\n'
+        '        </provider>\n'
+    ) % {"pkg": JC_PACKAGE, "fileauth": FILE_AUTH}
 
     m3, n2 = re.subn(r'(<application\b[^>]*>)', r'\1' + license_activity, m, count=1)
     if n2:
@@ -492,6 +651,13 @@ def patch_manifest():
     if 'android:banner' not in m:
         m = re.sub(r'(<application\b)', r'\1 android:banner="@drawable/jc_banner"', m, count=1)
         log("bannière TV ajoutée à <application>")
+
+    # d) permission d'installer les mises à jour
+    if 'REQUEST_INSTALL_PACKAGES' not in m:
+        perm = '    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n'
+        m, n3 = re.subn(r'(<application\b)', perm + r'    \1', m, count=1)
+        if n3:
+            log("permission REQUEST_INSTALL_PACKAGES ajoutée")
 
     write(MANIFEST, m)
 
