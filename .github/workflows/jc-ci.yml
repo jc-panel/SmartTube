@@ -43,14 +43,14 @@ jobs:
       - name: Droits gradlew
         run: chmod +x gradlew
 
-      - name: Build (stbeta release)
-        run: ./gradlew clean assembleStbetaRelease
+      - name: Build (fdroid release, sans services Google)
+        run: ./gradlew clean assembleStfdroidRelease
 
       - name: Renommer l'APK universel
         id: apk
         run: |
-          SRC=$(find smarttubetv/build/outputs/apk/stbeta/release -name "*universal*.apk" | head -n1)
-          if [ -z "$SRC" ]; then SRC=$(find smarttubetv/build/outputs/apk/stbeta/release -name "*.apk" | head -n1); fi
+          SRC=$(find smarttubetv/build/outputs/apk/stfdroid/release -name "*universal*.apk" | head -n1)
+          if [ -z "$SRC" ]; then SRC=$(find smarttubetv/build/outputs/apk/stfdroid/release -name "*.apk" | head -n1); fi
           cp "$SRC" tubeplus-tv.apk
           echo "path=tubeplus-tv.apk" >> $GITHUB_OUTPUT
 

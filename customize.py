@@ -52,7 +52,7 @@ def write(path, content):
 # ============================================================================
 def rename_app():
     # app_name dans tous les flavors
-    for flavor in ("main", "stbeta", "ststable"):
+    for flavor in ("main", "stbeta", "ststable", "stfdroid"):
         p = os.path.join(MAIN_SRC if flavor == "main" else os.path.join(APP_MODULE, "src", flavor),
                          "res", "values", "strings.xml")
         if os.path.exists(p):
@@ -63,15 +63,15 @@ def rename_app():
                 write(p, s2)
                 log("app_name -> %s (%s)" % (APP_NAME, flavor))
 
-    # applicationId du flavor stbeta (celui qu'on build)
+    # applicationId du flavor stfdroid (celui qu'on build — sans services Google)
     g = read(BUILD_GRADLE)
-    g2 = re.sub(r'(stbeta\s*\{\s*\n\s*applicationId\s+")[^"]+(")',
+    g2 = re.sub(r'(stfdroid\s*\{\s*\n\s*applicationId\s+")[^"]+(")',
                 r'\g<1>' + APPLICATION_ID + r'\g<2>', g, count=1)
     if g2 != g:
         write(BUILD_GRADLE, g2)
-        log("applicationId stbeta -> %s" % APPLICATION_ID)
+        log("applicationId stfdroid -> %s" % APPLICATION_ID)
     else:
-        log("!! applicationId stbeta non trouvé (vérifier build.gradle)")
+        log("!! applicationId stfdroid non trouvé (vérifier build.gradle)")
 
 
 # ============================================================================
